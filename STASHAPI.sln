@@ -7,6 +7,13 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "STASHAPI-CSTests", "STASHAP
 EndProject
 Project("{D954291E-2A0B-460D-934E-DC6B0785DB48}") = "STASHAPI", "STASHAPI\STASHAPI.shproj", "{7AC98714-6976-4A57-A319-7082DBF1B7B1}"
 EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Solution Items", "Solution Items", "{CB981F1C-B717-4759-A072-3187AB7F121B}"
+	ProjectSection(SolutionItems) = preProject
+		.gitattributes = .gitattributes
+		.gitignore = .gitignore
+		README.md = README.md
+	EndProjectSection
+EndProject
 Global
 	GlobalSection(SharedMSBuildProjectFiles) = preSolution
 		STASHAPI\STASHAPI.projitems*{7ac98714-6976-4a57-a319-7082dbf1b7b1}*SharedItemsImports = 13
