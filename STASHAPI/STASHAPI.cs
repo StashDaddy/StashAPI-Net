@@ -5,6 +5,8 @@
  * - Solution
  * -- Code .net/c#/vb project
  * -- STASHAPI shared project
+ * 
+ * Important Note - you must add the following references to you code/application project
  */
 using System;                           // Reference: System
 using System.Text;                      // Reference: System
