@@ -1846,7 +1846,7 @@ namespace Stash
                 GetError(retVal, out retCode, out string msg, out string extMsg);
                 if (this.verbosity)
                 {
-                    Console.WriteLine("- Error Occurred putFile, Code: " + retCode.ToString() + " Message: " + (msg != null ? msg.ToString() : "Not Available") + " Extended Message: " + (extMsg != null ? extMsg.ToString() : "Not Available"));
+                    Console.WriteLine("- Error Occurred putFileChunked, Code: " + retCode.ToString() + " Message: " + (msg != null ? msg.ToString() : "Not Available") + " Extended Message: " + (extMsg != null ? extMsg.ToString() : "Not Available"));
                 }
             }
             return retVal;
@@ -2853,6 +2853,8 @@ namespace Stash
             this.dParams = srcIdentifier;
             this.url = this.BASE_API_URL + "api2/auth/adauth";
 
+            if (!this.validateParams("checkcredsad")) { throw new ArgumentException("Invalid Input Parameters"); }
+
             apiResult = this.SendRequest();
 
             if (this.dParams != null) { this.dParams.Clear(); }
@@ -3115,7 +3117,7 @@ namespace Stash
             return apiResult;
         }
 
-        // Function deletes a specific version of a file to the current / master file
+        // Function deletes a specific version of a file
         // Returns the JSON encoded response string to make it easier to parse by API caller
         public string deleteVersion(Dictionary<string, object> srcIdentifier, out int retCode)
         {
