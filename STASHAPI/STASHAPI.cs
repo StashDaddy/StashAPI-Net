@@ -698,7 +698,13 @@ namespace Stash
               .Select(s => s[random.Next(s.Length)]).ToArray());
             chunkedParams.Add("temp_name", temp_name);
 
-            int chunkSize = 1000000; // Upload 1mb at a time
+            int chunkSize = 1000000;
+
+            if((int)uploadFile.Length < chunkSize)
+            {
+                chunkSize = (int)uploadFile.Length;  // if the file is smaller than the chunk size, upload the file as one chunk
+            }
+
             byte[] buffer = new byte[chunkSize];
             FileStream fileStream = null;
             try
@@ -822,10 +828,10 @@ namespace Stash
                                 //objStash.NumTotalFileSizes = total;
                             }
                             if ((fileLength - processedBytes) < Convert.ToUInt64(chunkSize))
-                            {
+                            {                         
                                 buffer = new byte[fileLength - processedBytes];
                             }
-
+                       
                             requestToServer.Dispose();
                         }
                         catch (Exception e)
@@ -1840,7 +1846,7 @@ namespace Stash
                 GetError(retVal, out retCode, out string msg, out string extMsg);
                 if (this.verbosity)
                 {
-                    Console.WriteLine("- Error Occurred putFileChunked, Code: " + retCode.ToString() + " Message: " + (msg != null ? msg.ToString() : "Not Available") + " Extended Message: " + (extMsg != null ? extMsg.ToString() : "Not Available"));
+                    Console.WriteLine("- Error Occurred putFile, Code: " + retCode.ToString() + " Message: " + (msg != null ? msg.ToString() : "Not Available") + " Extended Message: " + (extMsg != null ? extMsg.ToString() : "Not Available"));
                 }
             }
             return retVal;
@@ -2847,8 +2853,6 @@ namespace Stash
             this.dParams = srcIdentifier;
             this.url = this.BASE_API_URL + "api2/auth/adauth";
 
-            if (!this.validateParams("checkcredsad")) { throw new ArgumentException("Invalid Input Parameters"); }
-
             apiResult = this.SendRequest();
 
             if (this.dParams != null) { this.dParams.Clear(); }
@@ -3111,7 +3115,7 @@ namespace Stash
             return apiResult;
         }
 
-        // Function deletes a specific version of a file
+        // Function deletes a specific version of a file to the current / master file
         // Returns the JSON encoded response string to make it easier to parse by API caller
         public string deleteVersion(Dictionary<string, object> srcIdentifier, out int retCode)
         {
