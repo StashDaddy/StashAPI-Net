@@ -678,7 +678,7 @@ namespace Stash
 
         // Uploads a file to the server in chunks. While the functions are awaited, the chunks are being uploaded to the file synchronously.
         //TODO: Update function to upload chunks asynchronously
-        public async Task<string> SendFileRequestChunked(string fileNameIn, object objStash, System.Threading.CancellationTokenSource ct)
+        public async Task<string> SendFileRequestChunked(string fileNameIn, Action<ulong,ulong,string> callback, System.Threading.CancellationTokenSource ct)
         {
             string retVal = "";
 
@@ -699,10 +699,12 @@ namespace Stash
             chunkedParams.Add("temp_name", temp_name);
 
             int chunkSize = 1000000;
+            bool oneChunk = false;
 
             if((int)uploadFile.Length < chunkSize)
             {
                 chunkSize = (int)uploadFile.Length;  // if the file is smaller than the chunk size, upload the file as one chunk
+                oneChunk = true;
             }
 
             byte[] buffer = new byte[chunkSize];
@@ -774,7 +776,13 @@ namespace Stash
                     else
                     {
                         double chunks = fileStream.Length / chunkSize;
-                        var totalChunks = Math.Ceiling(chunks) + 1;
+                        var totalChunks = Math.Ceiling(chunks);
+
+                        // If the file is smaller than 1MB it will be uploaded in one chunk. Othwerwise, we add 1 to the total chunks to ensure all chunks are uploaded.
+                        if (!oneChunk)
+                        {
+                            totalChunks = totalChunks + 1;
+                        }
 
                         if (i == 3)
                         {
@@ -811,21 +819,16 @@ namespace Stash
                             HttpResponseMessage response = await requestToServer.PostAsync(url, form);
 
                             retVal = response.Content.ReadAsStringAsync().Result;
-
                             ulong fileLength = Convert.ToUInt64(fileStream.Length);
                             ulong processedBytes = Convert.ToUInt64(buffer.Length * i);
                             ulong total = Convert.ToUInt64(fileLength - processedBytes);
                             if (fileLength < Convert.ToUInt64(buffer.Length))
                             {
-                                // ToDo Replace with callback (see Issue #9, STASHAPI-NET-Dev)
-                                //objStash.TotalFileSizeMax = fileLength;
-                                //objStash.NumTotalFileSizes = fileLength;
+                                callback(fileLength, fileLength, fileNameIn);
                             }
                             else
                             {
-                                // ToDo Replace with callback (see Issue #9, STASHAPI-NET-Dev)
-                                //objStash.TotalFileSizeMax = fileLength;
-                                //objStash.NumTotalFileSizes = total;
+                                callback(fileLength, total, fileNameIn);
                             }
                             if ((fileLength - processedBytes) < Convert.ToUInt64(chunkSize))
                             {                         
@@ -1754,7 +1757,7 @@ namespace Stash
         }
 
         // Uploads file to the user's Vault using Chunks
-        public Dictionary<string, object> putFileChunked(string fileNameIn, Dictionary<string, object> srcIdentifier, object objStash, System.Threading.CancellationTokenSource ct, out int retCode, out UInt64 fileId, out UInt64 fileAliasId)
+        public Dictionary<string, object> putFileChunked(string fileNameIn, Dictionary<string, object> srcIdentifier, Action<ulong, ulong, string> callback, System.Threading.CancellationTokenSource ct, out int retCode, out UInt64 fileId, out UInt64 fileAliasId)
         {
             string apiResult = "";
             retCode = 0;
@@ -1821,7 +1824,7 @@ namespace Stash
 
             // apiResult = this.SendFileRequest(fileNameIn);
 
-            apiResult = this.SendFileRequestChunked(fileNameIn, objStash, ct).Result;
+            apiResult = this.SendFileRequestChunked(fileNameIn,callback, ct).Result;
             if (this.dParams != null) { this.dParams.Clear(); }
 
             retCode = GetResponseCodeDict(apiResult, out retVal);
