@@ -9,6 +9,8 @@
     <Import_RootNamespace>STASHAPI</Import_RootNamespace>
   </PropertyGroup>
   <ItemGroup>
-    <Compile Include="$(MSBuildThisFileDirectory)STASHAPI.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)STASHAPI.cs">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+    </Compile>
   </ItemGroup>
 </Project>
