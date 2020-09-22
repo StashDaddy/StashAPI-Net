@@ -678,7 +678,7 @@ namespace Stash
 
         // Uploads a file to the server in chunks. While the functions are awaited, the chunks are being uploaded to the file synchronously.
         //TODO: Update function to upload chunks asynchronously
-        public async Task<string> SendFileRequestChunked(string fileNameIn, Action<ulong,ulong,string> callback, System.Threading.CancellationTokenSource ct)
+        public async Task<string> SendFileRequestChunked(string fileNameIn, Action<ulong,string> callback, System.Threading.CancellationTokenSource ct)
         {
             string retVal = "";
 
@@ -778,7 +778,6 @@ namespace Stash
                         double chunks = fileStream.Length / chunkSize;
                         var totalChunks = Math.Ceiling(chunks);
 
-                        // If the file is smaller than 1MB it will be uploaded in one chunk. Othwerwise, we add 1 to the total chunks to ensure all chunks are uploaded.
                         if (!oneChunk)
                         {
                             totalChunks = totalChunks + 1;
@@ -822,14 +821,23 @@ namespace Stash
                             ulong fileLength = Convert.ToUInt64(fileStream.Length);
                             ulong processedBytes = Convert.ToUInt64(buffer.Length * i);
                             ulong total = Convert.ToUInt64(fileLength - processedBytes);
-                            if (fileLength < Convert.ToUInt64(buffer.Length))
+
+                            if (oneChunk)
                             {
-                                callback(fileLength, fileLength, fileNameIn);
+                                if (i < totalChunks)
+                                {
+                                    callback(processedBytes, fileNameIn);
+                                }
                             }
                             else
                             {
-                                callback(fileLength, total, fileNameIn);
+                                if (i < totalChunks - 1)
+                                {
+                                    
+                                    callback(processedBytes, fileNameIn);
+                                }
                             }
+
                             if ((fileLength - processedBytes) < Convert.ToUInt64(chunkSize))
                             {                         
                                 buffer = new byte[fileLength - processedBytes];
@@ -1757,7 +1765,7 @@ namespace Stash
         }
 
         // Uploads file to the user's Vault using Chunks
-        public Dictionary<string, object> putFileChunked(string fileNameIn, Dictionary<string, object> srcIdentifier, Action<ulong, ulong, string> callback, System.Threading.CancellationTokenSource ct, out int retCode, out UInt64 fileId, out UInt64 fileAliasId)
+        public Dictionary<string, object> putFileChunked(string fileNameIn, Dictionary<string, object> srcIdentifier, Action<ulong, string> callback, System.Threading.CancellationTokenSource ct, out int retCode, out UInt64 fileId, out UInt64 fileAliasId)
         {
             string apiResult = "";
             retCode = 0;
