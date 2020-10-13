@@ -797,9 +797,9 @@ namespace Stash
                         {
                             chunkedParams.Add("chunkedUpload", "true");
                         }
-
                         chunkedParams.Add("progress", i + "/" + totalChunks);
 
+                        int pos = fileNameIn.LastIndexOf("\\") + 1;
                         var apiParameters = new JavaScriptSerializer().Serialize(apiParams);
                         var chunkedParameters = new JavaScriptSerializer().Serialize(chunkedParams);
                         ASCIIEncoding ascii = new ASCIIEncoding();
@@ -809,7 +809,7 @@ namespace Stash
                         byte[] chunkedParamBytes = ascii.GetBytes(chunkedParameters);
                         HttpClient requestToServer = new HttpClient();
                         MultipartFormDataContent form = new MultipartFormDataContent();
-                        form.Add(data, "file", fileNameIn);
+                        form.Add(data, "file", fileNameIn.Substring(pos, fileNameIn.Length - pos));
                         form.Add(new ByteArrayContent(strParamsBytes), "params");
                         form.Add(new ByteArrayContent(chunkedParamBytes), "chunkedParams");
 
