@@ -699,12 +699,10 @@ namespace Stash
             chunkedParams.Add("temp_name", temp_name);
 
             int chunkSize = 1000000;
-            bool oneChunk = false;
 
             if((int)uploadFile.Length < chunkSize)
             {
                 chunkSize = (int)uploadFile.Length;  // if the file is smaller than the chunk size, upload the file as one chunk
-                oneChunk = true;
             }
 
             byte[] buffer = new byte[chunkSize];
@@ -775,13 +773,9 @@ namespace Stash
                     }
                     else
                     {
-                        double chunks = fileStream.Length / chunkSize;
-                        var totalChunks = Math.Ceiling(chunks);
 
-                        if (!oneChunk)
-                        {
-                            totalChunks = totalChunks + 1;
-                        }
+                        double chunks = (double)fileStream.Length / (double)chunkSize;
+                        var totalChunks = Math.Ceiling(chunks);
 
                         if (i == 3)
                         {
