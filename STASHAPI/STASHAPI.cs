@@ -816,21 +816,12 @@ namespace Stash
                             ulong processedBytes = Convert.ToUInt64(buffer.Length * i);
                             ulong total = Convert.ToUInt64(fileLength - processedBytes);
 
-                            if (oneChunk)
+
+                            if (i < totalChunks)
                             {
-                                if (i < totalChunks)
-                                {
-                                    callback(processedBytes, fileNameIn);
-                                }
+                                callback(processedBytes, fileNameIn);
                             }
-                            else
-                            {
-                                if (i < totalChunks - 1)
-                                {
-                                    
-                                    callback(processedBytes, fileNameIn);
-                                }
-                            }
+
 
                             if ((fileLength - processedBytes) < Convert.ToUInt64(chunkSize))
                             {                         
