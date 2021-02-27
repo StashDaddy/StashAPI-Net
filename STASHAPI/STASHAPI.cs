@@ -261,6 +261,64 @@ namespace Stash
             return retVal;
         }
 
+        // Encrypts a File with the API_PW
+        public bool EncryptFile(string filePath, out string encFileName, out string errMsg)
+        {
+            bool retVal = false; errMsg = ""; encFileName = "";           
+            if (filePath == "" || filePath == null) { throw new ArgumentException("filePath Must Be Specified"); }
+            if (this.api_pw.Length < 32) { throw new ArgumentException("API_PW must be at least 32 characters"); }
+
+            try
+            {
+                Aes crypto = Aes.Create();
+                crypto.Key = Encoding.ASCII.GetBytes(this.api_pw);
+                crypto.Mode = CipherMode.CBC;
+                crypto.Padding = PaddingMode.PKCS7;
+
+                ICryptoTransform encryptor = crypto.CreateEncryptor(crypto.Key, crypto.IV);
+                encFileName = filePath + ".enc";
+
+                using (FileStream outFS = new FileStream(encFileName, FileMode.Create))
+                {
+                    // Write the IV to the encrypted file
+                    outFS.Write(crypto.IV, 0, crypto.IV.Length);
+
+                    // Write the CT to the encrypted file
+                    using (CryptoStream outSE = new CryptoStream(outFS, encryptor, CryptoStreamMode.Write))
+                    {
+                        int count = 0;
+                        int offset = 0;
+                        int bytesRead = 0;
+                        int blockSize = 1024;
+                        byte[] dataBlock = new byte[blockSize];
+
+                        using (FileStream inFS = new FileStream(filePath, FileMode.Open))
+                        {
+                            do
+                            {
+                                count = inFS.Read(dataBlock, 0, blockSize);
+                                offset += count;
+                                outSE.Write(dataBlock, 0, count);
+                                bytesRead += blockSize;
+                            }
+                            while (count > 0);
+                            inFS.Close();
+                        }
+                        outSE.FlushFinalBlock();
+                        outSE.Close();
+                    }
+                }
+                retVal = true;
+            }
+            catch (Exception e)
+            {
+                errMsg = e.Message;
+                retVal = false;
+                encFileName = "";
+            }
+            return retVal;
+        }
+
         /*
         // Decrypts a String with the API_PW
         public string DecryptString(string strString, bool inHexBits)
@@ -1743,6 +1801,40 @@ namespace Stash
                 if (this.verbosity)
                 {
                     Console.WriteLine("- Error Occurred putFile, Code: " + retCode.ToString() + " Message: " + (msg != null ? msg.ToString() : "Not Available") + " Extended Message: " + (extMsg != null ? extMsg.ToString() : "Not Available"));
+                }
+            }
+
+            return retVal;
+        }
+
+        // Uploads a file to the Vault Support system
+        // This is used to transmit log/troubleshooting data from clients to a central repository on the server
+        public Dictionary<string, object> putFileSupport(string fileNameIn, out int retCode, out string msg, out string extMsg)
+        {
+            string apiResult = ""; msg = ""; extMsg = ""; retCode = 0;
+            Dictionary<string, object> retVal = null;
+
+            System.IO.FileInfo fInfo = new System.IO.FileInfo(fileNameIn);
+            if (!fInfo.Exists)
+            {
+                throw new Exception("Incorrect Input File Path or File Does Not Exist");
+            }
+
+            //this.dParams = srcIdentifier;
+            this.url = this.BASE_API_URL + "api2/support/writesupport";
+            //if (!this.validateParams("write")) { throw new ArgumentException("Invalid Input Parameters"); }
+
+            apiResult = this.SendFileRequest(fileNameIn);
+            //if (this.dParams != null) { this.dParams.Clear(); }
+
+            retCode = GetResponseCodeDict(apiResult, out retVal);
+
+            if (retCode != 200)
+            {
+                GetError(retVal, out retCode, out msg, out extMsg);
+                if (this.verbosity)
+                {
+                    Console.WriteLine("- Error Occurred putFileSupport, Code: " + retCode.ToString() + " Message: " + (msg != null ? msg.ToString() : "Not Available") + " Extended Message: " + (extMsg != null ? extMsg.ToString() : "Not Available"));
                 }
             }
 
