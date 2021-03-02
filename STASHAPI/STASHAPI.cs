@@ -274,7 +274,7 @@ namespace Stash
                 crypto.Key = Encoding.ASCII.GetBytes(this.api_pw);
                 crypto.Mode = CipherMode.CBC;
                 crypto.Padding = PaddingMode.PKCS7;
-
+                           
                 ICryptoTransform encryptor = crypto.CreateEncryptor(crypto.Key, crypto.IV);
                 encFileName = filePath + ".enc";
 
@@ -319,11 +319,63 @@ namespace Stash
             return retVal;
         }
 
-        /*
+        // Decrypts a File with the API_PW
+        public bool DecryptFile(string filePath, out string decFileName, out string errMsg)
+        {
+            bool retVal = false; errMsg = ""; decFileName = ""; int count = 0; int ivLen = 0;
+            if (filePath == "" || filePath == null) { throw new ArgumentException("filePath Must Be Specified"); }
+            if (this.api_pw.Length < 32) { throw new ArgumentException("API_PW must be at least 32 characters"); }
+
+            try
+            {
+                decFileName = filePath + ".dec";
+
+                Aes crypto = Aes.Create();
+                crypto.Key = Encoding.ASCII.GetBytes(this.api_pw);
+                crypto.Mode = CipherMode.CBC;
+                crypto.Padding = PaddingMode.PKCS7;
+
+                byte[] ivBytes = new byte[crypto.IV.Length];
+
+                // Get the IV from the input file
+                using (FileStream inFS = new FileStream(filePath, FileMode.Open))
+                {
+                    // Read the IV from the encrypted file - it will be the first IV Length # of bytes
+                    ivLen = inFS.Read(ivBytes, 0, crypto.IV.Length);
+
+                    crypto.IV = ivBytes;
+                    ICryptoTransform decryptor = crypto.CreateDecryptor(crypto.Key, crypto.IV);
+                    using (CryptoStream inCS = new CryptoStream(inFS, decryptor, CryptoStreamMode.Read))
+                    {
+                        using (FileStream outFS = new FileStream(decFileName, FileMode.Create, FileAccess.ReadWrite))
+                        {
+                            int blockSize = 1024;
+                            byte[] buffer = new byte[blockSize];
+                            while ((count = inCS.Read(buffer, 0, buffer.Length)) > 0)
+                            {
+                                outFS.Write(buffer, 0, count);
+                            }
+                            outFS.Close();
+                        }
+                        inCS.Close();
+                    }
+                    inFS.Close();
+                }
+
+                retVal = true;
+            }
+            catch (Exception e)
+            {
+                errMsg = e.Message;
+                retVal = false;
+                decFileName = "";
+            }
+            return retVal;
+        }
+
         // Decrypts a String with the API_PW
         public string DecryptString(string strString, bool inHexBits)
         {
-            //string retVal = "";
             object tRetVal;
 
             if (strString == "") { return ""; }
@@ -334,20 +386,32 @@ namespace Stash
             {
                 strString = hex2bin(strString);
             }
-            //byte[] strBytes = str2arr(strString);       // Convert input string to a byte array to create IV and CT arrays
-            byte[] strBytes = Encoding.ASCII.GetBytes(strString);
 
-            System.Security.Cryptography.Aes crypto = System.Security.Cryptography.Aes.Create();
+            // Convert input string to a byte array to create IV and CT arrays
+            // Assume input array after hex2bin has null padding elements between chars in the array, e.g. 41-0-38-0-133-0-208...
+            byte[] strBytesUni = Encoding.Unicode.GetBytes(strString);
+            byte[] strBytes = new byte[strBytesUni.Length/2];
+            int counter = 0;
+            for (int i = 0; i < strBytesUni.Length; i++)
+            {
+                if (strBytesUni[i] != 0)
+                {
+                    strBytes[counter] = strBytesUni[i];
+                    counter++;
+                }
+            }
 
-            byte[] strIv = new byte[crypto.IV.Length - 1];         // Build the init vector byte array
-            for (int i = 0; i < crypto.IV.Length - 1; i++)
+            Aes crypto = Aes.Create();
+
+            byte[] strIv = new byte[crypto.IV.Length];         // Build the init vector byte array
+            for (int i = 0; i < crypto.IV.Length; i++)
             {
                 strIv[i] = strBytes[i];
             }
 
-            byte[] strCt = new byte[strString.Length - crypto.IV.Length - 1];     // Build the ciphertext byte array
-            int counter = 0;
-            for (int i = crypto.IV.Length; i < strString.Length - 1; i++)
+            byte[] strCt = new byte[strString.Length - crypto.IV.Length];     // Build the ciphertext byte array
+            counter = 0;
+            for (int i = crypto.IV.Length; i < strString.Length; i++)
             {
                 strCt[counter] = strBytes[i];
                 counter++;
@@ -368,8 +432,7 @@ namespace Stash
 
             return tRetVal.ToString();
         }
-        */
-
+        
         // Checks the parameter and value for sanity and compliance with rules
         public bool isValid(Dictionary<string, object> arrDataIn)
         {
@@ -2900,7 +2963,7 @@ namespace Stash
         * @param Array, an associative array containing the source identifier, the values of which credentials to check
         * @return Array, the result / output of the operation
        */
-        public Dictionary<string, object> checkCreds(Dictionary<string, object> srcIdentifier, out int retCode, out string errMsg)
+                public Dictionary<string, object> checkCreds(Dictionary<string, object> srcIdentifier, out int retCode, out string errMsg)
         {
             string apiResult = ""; retCode = 0; errMsg = "";
             Dictionary<string, object> retVal = null;
