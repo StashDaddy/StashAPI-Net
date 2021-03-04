@@ -33,7 +33,9 @@ namespace Stash
         public const int STASHAPI_FILE_BUFFER_SIZE = 1024;  // Input / Output buffer for reading / writing files
         public const string BASE_VAULT_FOLDER = "My Home";
         public const string BASE_URL = "https://www.stage.stashbusiness.com/";      // This is the URL to send requests to, can be overrided by BASE_API_URL in the constructor
-        public const string ENC_ALG = "aes-256-cbc";        // Encryption algorithm for use in encryptString & decryptString()
+        public const string ENC_ALG = "aes-256-cbc";        // Encryption algorithm for use in encryptString & decryptString(), encryptFile() & decryptFile(), uses an IV of 16 bytes
+        public const int STASH_ENC_BLOCKSIZE = 1024;        // The size of the data block to encrypt; must match the blocksize used in the decryption platform - IV.length
+        public const int STASH_DEC_BLOCKSIZE = 1040;        // The size of the data block to decrypt; must be STASH_ENC_BLOCKSIZE + IV.length; must match the blocksize used in the encryption platform + IV.length
 
         private string _api_id;             // The API_ID For your account
         public string api_id
@@ -190,6 +192,46 @@ namespace Stash
             return this.api_signature;
         }
 
+        // Encrypts a file with AES-256-CBC; encrypts a file in individual blocks
+        // Cross-platform compatible; must use same (DEC_BLOCKSIZE - IV.Length) as the platform used for decryption
+        public bool EncryptFileChunked(string fileName, out string encFileName, out string errMsg)
+        {
+            errMsg = "";
+            encFileName = fileName + ".enc";
+            byte[] pt;
+            byte[] ct;
+
+            if (! File.Exists(fileName)) { throw new ArgumentException("Input File Does Not Exist"); }
+
+            using (BinaryWriter wrt = new BinaryWriter(new FileStream(encFileName, FileMode.Create, FileAccess.Write, FileShare.Read)))
+            using (BinaryReader rdr = new BinaryReader(File.OpenRead(fileName)))
+            {
+                long fileLen = rdr.BaseStream.Length;
+                long counter = 0;
+                while (counter < fileLen)
+                {
+                    if (fileLen - counter > STASH_ENC_BLOCKSIZE)
+                    {
+                        // First + following blocks up to but not including last block of file unless its an even blocksize
+                        pt = new byte[STASH_ENC_BLOCKSIZE];
+                        pt = rdr.ReadBytes(STASH_ENC_BLOCKSIZE);
+                        counter += STASH_ENC_BLOCKSIZE;
+                    }
+                    else
+                    {
+                        // Last block
+                        pt = new byte[fileLen - counter];
+                        pt = rdr.ReadBytes((int)(fileLen - counter));
+                        counter = fileLen;
+                    }
+
+                    ct = EncryptString(pt);
+                    wrt.Write(ct);
+                }
+            }  
+            return true;
+        }
+        
         // Encrypts a String with the API_PW
         public string EncryptString(string strString, bool returnHexBits)
         {
@@ -198,7 +240,7 @@ namespace Stash
 
             if (strString == "") { return ""; }
             if (this.api_pw == "") { return ""; }
-            if (this.api_pw.Length < 32) { throw new ArgumentException("API_PW must be at least 32 characters"); }//if (this.api_pw.Length < 32) { throw new ArgumentException("API_PW must be at least 32 characters"); }
+            if (this.api_pw.Length < 32) { throw new ArgumentException("API_PW must be at least 32 characters"); }
 
             Aes crypto = Aes.Create();
             crypto.Key = Encoding.ASCII.GetBytes(this.api_pw);
@@ -206,11 +248,11 @@ namespace Stash
             crypto.Padding = PaddingMode.PKCS7;
 
             ICryptoTransform encryptor = crypto.CreateEncryptor(crypto.Key, crypto.IV);
-            using (System.IO.MemoryStream msEncrypt = new System.IO.MemoryStream())
+            using (MemoryStream msEncrypt = new MemoryStream())
             {
                 using (CryptoStream csEncrypt = new CryptoStream(msEncrypt, encryptor, CryptoStreamMode.Write))
                 {
-                    using (System.IO.StreamWriter swEncrypt = new System.IO.StreamWriter(csEncrypt))
+                    using (StreamWriter swEncrypt = new StreamWriter(csEncrypt))
                     {
                         swEncrypt.Write(strString);
                     }
@@ -241,13 +283,9 @@ namespace Stash
                 if (returnHexBits)
                 {
                     retVal = retVal + Convert.ToInt32(tRetVal[i]).ToString("X2");
-                    //retVal = retVal + Hex(strRetVal[i]).PadLeft(2, "0");
-                    //retVal = retVal + Convert.ToInt32(strRetVal[i].ToString(), 16).ToString().PadLeft(2, '0');
                 }
                 else
                 {
-                    //retVal = retVal + Chr(tRetVal[i].ToString());
-                    //retVal = retVal + (char)strRetVal[i];
                     retVal = retVal + tRetVal[i].ToString();
                 }
             }
@@ -261,116 +299,105 @@ namespace Stash
             return retVal;
         }
 
-        // Encrypts a File with the API_PW
-        public bool EncryptFile(string filePath, out string encFileName, out string errMsg)
+        // Encrypts a set of bytes with the API_PW
+        public byte[] EncryptString(byte[] strString)
         {
-            bool retVal = false; errMsg = ""; encFileName = "";           
-            if (filePath == "" || filePath == null) { throw new ArgumentException("filePath Must Be Specified"); }
-            if (this.api_pw.Length < 32) { throw new ArgumentException("API_PW must be at least 32 characters"); }
+            byte[] retVal;
+            byte[] ct;
 
-            try
+            if (strString.Length < 1 ) { throw new ArgumentException("Input Bytes are Empty"); }
+            if (this.api_pw == "") { return null; }
+            if (this.api_pw.Length < 32) { throw new ArgumentException("API_PW must be at least 32 characters"); }//if (this.api_pw.Length < 32) { throw new ArgumentException("API_PW must be at least 32 characters"); }
+
+            Aes crypto = Aes.Create();
+            crypto.Key = Encoding.ASCII.GetBytes(this.api_pw);
+            crypto.Mode = CipherMode.CBC;
+            crypto.Padding = PaddingMode.PKCS7;
+
+            ICryptoTransform encryptor = crypto.CreateEncryptor(crypto.Key, crypto.IV);
+            using (MemoryStream msEncrypt = new MemoryStream(strString))
+            using (CryptoStream csEncrypt = new CryptoStream(msEncrypt, encryptor, CryptoStreamMode.Read))
+            using (BinaryReader srEncrypt = new BinaryReader(csEncrypt))
             {
-                Aes crypto = Aes.Create();
-                crypto.Key = Encoding.ASCII.GetBytes(this.api_pw);
-                crypto.Mode = CipherMode.CBC;
-                crypto.Padding = PaddingMode.PKCS7;
-                           
-                ICryptoTransform encryptor = crypto.CreateEncryptor(crypto.Key, crypto.IV);
-                encFileName = filePath + ".enc";
-
-                using (FileStream outFS = new FileStream(encFileName, FileMode.Create))
-                {
-                    // Write the IV to the encrypted file
-                    outFS.Write(crypto.IV, 0, crypto.IV.Length);
-
-                    // Write the CT to the encrypted file
-                    using (CryptoStream outSE = new CryptoStream(outFS, encryptor, CryptoStreamMode.Write))
-                    {
-                        int count = 0;
-                        int offset = 0;
-                        int bytesRead = 0;
-                        int blockSize = 1024;
-                        byte[] dataBlock = new byte[blockSize];
-
-                        using (FileStream inFS = new FileStream(filePath, FileMode.Open))
-                        {
-                            do
-                            {
-                                count = inFS.Read(dataBlock, 0, blockSize);
-                                offset += count;
-                                outSE.Write(dataBlock, 0, count);
-                                bytesRead += blockSize;
-                            }
-                            while (count > 0);
-                            inFS.Close();
-                        }
-                        outSE.FlushFinalBlock();
-                        outSE.Close();
-                    }
-                }
-                retVal = true;
+                ct = srEncrypt.ReadBytes(1024);
             }
-            catch (Exception e)
-            {
-                errMsg = e.Message;
-                retVal = false;
-                encFileName = "";
-            }
+
+            retVal = new byte[ct.Length + crypto.IV.Length];
+            Buffer.BlockCopy(crypto.IV, 0, retVal, 0, crypto.IV.Length);
+            Buffer.BlockCopy(ct, 0, retVal, crypto.IV.Length, ct.Length);
+
             return retVal;
         }
 
         // Decrypts a File with the API_PW
-        public bool DecryptFile(string filePath, out string decFileName, out string errMsg)
+        // Buffer Block size must match StashEncryption.php::STASH_DEC_BLOCKSIZE to be cross-platform compatible
+        public bool DecryptFileChunked(string fileName, out string decFileName, out string errMsg)
         {
-            bool retVal = false; errMsg = ""; decFileName = ""; int count = 0; int ivLen = 0;
-            if (filePath == "" || filePath == null) { throw new ArgumentException("filePath Must Be Specified"); }
-            if (this.api_pw.Length < 32) { throw new ArgumentException("API_PW must be at least 32 characters"); }
-
+            const int STASH_DEC_BLOCKSIZE = 1040;
+            decFileName = fileName + ".dec";
+            errMsg = "";
+            byte[] strIv;                                       // The Init Vector
+            long fileLen = 0;                                   // Stores the file length of the CT file
+            byte[] ct;                                          // Working buffer for converting CT to PT
+            byte[] pt;                                          // Working output buffer containing the PT
+            Aes crypto;
             try
             {
-                decFileName = filePath + ".dec";
+                crypto = Aes.Create();
+                strIv = new byte[crypto.IV.Length];          // Build the init vector byte array
 
-                Aes crypto = Aes.Create();
-                crypto.Key = Encoding.ASCII.GetBytes(this.api_pw);
-                crypto.Mode = CipherMode.CBC;
-                crypto.Padding = PaddingMode.PKCS7;
-
-                byte[] ivBytes = new byte[crypto.IV.Length];
-
-                // Get the IV from the input file
-                using (FileStream inFS = new FileStream(filePath, FileMode.Open))
+                // Get IV from file
+                using (BinaryReader rdr = new BinaryReader(File.OpenRead(fileName)))
                 {
-                    // Read the IV from the encrypted file - it will be the first IV Length # of bytes
-                    ivLen = inFS.Read(ivBytes, 0, crypto.IV.Length);
-
-                    crypto.IV = ivBytes;
-                    ICryptoTransform decryptor = crypto.CreateDecryptor(crypto.Key, crypto.IV);
-                    using (CryptoStream inCS = new CryptoStream(inFS, decryptor, CryptoStreamMode.Read))
-                    {
-                        using (FileStream outFS = new FileStream(decFileName, FileMode.Create, FileAccess.ReadWrite))
-                        {
-                            int blockSize = 1024;
-                            byte[] buffer = new byte[blockSize];
-                            while ((count = inCS.Read(buffer, 0, buffer.Length)) > 0)
-                            {
-                                outFS.Write(buffer, 0, count);
-                            }
-                            outFS.Close();
-                        }
-                        inCS.Close();
-                    }
-                    inFS.Close();
+                    // Read IV length bytes out
+                    strIv = rdr.ReadBytes(crypto.IV.Length);
+                    fileLen = rdr.BaseStream.Length;
                 }
 
-                retVal = true;
-            }
-            catch (Exception e)
+                crypto.Mode = CipherMode.CBC;
+                crypto.Key = Encoding.ASCII.GetBytes(this.api_pw);
+                crypto.IV = strIv;
+                crypto.Padding = PaddingMode.PKCS7;
+
+                // Read CT from file and decrypt it, and write it out
+                long offset = strIv.Length;
+                using (BinaryWriter wrt = new BinaryWriter(File.OpenWrite(decFileName)))
+                using (BinaryReader rdr = new BinaryReader(File.OpenRead(fileName)))
+                using (ICryptoTransform decryptor = crypto.CreateDecryptor(crypto.Key, crypto.IV))
+                {
+                    rdr.BaseStream.Seek(offset, SeekOrigin.Begin);
+                    // Need loop here to read entire file in blocks
+                    while (offset < fileLen)
+                    {
+                        if (fileLen - offset > STASH_DEC_BLOCKSIZE)
+                        {
+                            ct = new byte[STASH_DEC_BLOCKSIZE];
+                            ct = rdr.ReadBytes(STASH_DEC_BLOCKSIZE);
+                            offset += STASH_DEC_BLOCKSIZE;
+                        }
+                        else
+                        {
+                            ct = new byte[fileLen - offset];
+                            ct = rdr.ReadBytes((int)(fileLen - offset));
+                            offset = fileLen;
+                        }
+
+                        using (MemoryStream msDecrypt = new MemoryStream(ct))
+                        using (CryptoStream csDecrypt = new CryptoStream(msDecrypt, decryptor, CryptoStreamMode.Read))
+                        using (BinaryReader srDecrypt = new BinaryReader(csDecrypt))
+                        {
+                            pt = srDecrypt.ReadBytes(STASH_DEC_BLOCKSIZE);
+                            wrt.Write(pt);
+                        }
+                    }
+
+                    return true;
+                }
+            } catch (Exception e)
             {
                 errMsg = e.Message;
-                retVal = false;
-                decFileName = "";
+                return false;
             }
-            return retVal;
         }
 
         // Decrypts a String with the API_PW
@@ -425,9 +452,9 @@ namespace Stash
             if (strString.Length < crypto.IV.Length) { throw new Exception("Insufficient Input Data to Decrypt"); }
 
             ICryptoTransform decryptor = crypto.CreateDecryptor(crypto.Key, crypto.IV);
-            System.IO.MemoryStream msDecrypt = new System.IO.MemoryStream(strCt);
+            MemoryStream msDecrypt = new MemoryStream(strCt);
             CryptoStream csDecrypt = new CryptoStream(msDecrypt, decryptor, CryptoStreamMode.Read);
-            System.IO.StreamReader srDecrypt = new System.IO.StreamReader(csDecrypt);
+            StreamReader srDecrypt = new StreamReader(csDecrypt);
             tRetVal = srDecrypt.ReadToEnd();
 
             return tRetVal.ToString();
