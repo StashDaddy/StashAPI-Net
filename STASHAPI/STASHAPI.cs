@@ -176,7 +176,10 @@ namespace Stash
             if (!dataIn.TryGetValue("api_timestamp", out object apiTimestamp) || apiTimestamp == null || apiTimestamp.ToString() == "") { throw new System.Exception("Input array missing api_timestamp for signature calculation"); }
             if (dataIn.ContainsKey("api_signature")) { dataIn.Remove("api_signature"); }
 
-            strToSign = Http_build_query(dataIn);
+            // Replace this with json_encoded string of dataIn, unescpated slashes
+            //strToSign = Http_build_query(dataIn);
+            JavaScriptSerializer serializer = new JavaScriptSerializer();
+            strToSign = serializer.Serialize(dataIn);
 
             sig = Hash_hmac("sha256", strToSign, this.api_pw);
 
