@@ -851,7 +851,7 @@ namespace Stash
 
             int chunkSize = 1000000;
 
-            if((int)uploadFile.Length < chunkSize)
+            if((int)uploadFile.Length < chunkSize && (int)uploadFile.Length > 0)
             {
                 chunkSize = (int)uploadFile.Length;  // if the file is smaller than the chunk size, upload the file as one chunk
             }
@@ -861,7 +861,7 @@ namespace Stash
             try
             {
                 fileStream = new FileStream(fileNameIn, FileMode.Open, FileAccess.Read,
-                FileShare.Read, bufferSize: chunkSize, useAsync: true);
+                    FileShare.Read, bufferSize: chunkSize, useAsync: true);
                 Int32 bytesRead = 0;
                 int i = 1;
                 var responseString = string.Empty;
@@ -914,7 +914,11 @@ namespace Stash
                 var stopWatch = System.Diagnostics.Stopwatch.StartNew();
 
                 //Begin reading the file and send each chunk to the server.
-                while ((bytesRead = fileStream.Read(buffer, 0, buffer.Length)) > 0)
+                // Do the do/while loop at least once to handle zero-byte files
+                bytesRead = fileStream.Read(buffer, 0, buffer.Length);
+
+                //while ((bytesRead = fileStream.Read(buffer, 0, buffer.Length)) > 0)
+                do
                 {
                     //Check cancellation token. If the user clicks stop, the upload will be aborted.
                     bool isCancelled = ct.IsCancellationRequested;
@@ -975,10 +979,10 @@ namespace Stash
 
 
                             if ((fileLength - processedBytes) < Convert.ToUInt64(chunkSize))
-                            {                         
+                            {
                                 buffer = new byte[fileLength - processedBytes];
                             }
-                       
+
                             requestToServer.Dispose();
                         }
                         catch (Exception e)
@@ -988,7 +992,7 @@ namespace Stash
                         }
                         i++;
                     }
-                }
+                } while ((bytesRead = fileStream.Read(buffer, 0, buffer.Length)) > 0);
             }
             catch (Exception e)
             {
@@ -1419,6 +1423,10 @@ namespace Stash
                 {
                     this.validateCredParams(true, true, false, false);
                 }
+                else if (opIn == "checkcredsad")
+                {
+                    this.validateCredParams(true, true, false, false);
+                }
                 else if (opIn == "isvaliduser")
                 {
                     this.validateCredParams(false, true, false, false);
@@ -1819,50 +1827,51 @@ namespace Stash
             this.dParams = srcIdentifier;
             if (!this.validateParams("write")) { throw new ArgumentException("Invalid Input Parameters"); }
 
-            if (srcIdentifier.TryGetValue("overwriteFile", out object owFile))
-            {
-                overwriteFile = (owFile.ToString() == "1" ? true : false);
-                if (overwriteFile)
-                {
-                    if (!srcIdentifier.TryGetValue("overwriteFileId", out object objOwFileId))
-                    {
-                        throw new ArgumentException("overwriteFileId parameter not specified");
-                    }
-                    owFileId = Convert.ToUInt64(objOwFileId);
-                    if (owFileId < 1) { throw new Exception("Invalid overwriteFileId value"); }
-                }
-            }
+            // No need to check for existing file - overwrites are handled in the backend automatically
+            //if (srcIdentifier.TryGetValue("overwriteFile", out object owFile))
+            //{
+            //    overwriteFile = (owFile.ToString() == "1" ? true : false);
+            //    if (overwriteFile)
+            //    {
+            //        if (!srcIdentifier.TryGetValue("overwriteFileId", out object objOwFileId))
+            //        {
+            //            throw new ArgumentException("overwriteFileId parameter not specified");
+            //        }
+            //        owFileId = Convert.ToUInt64(objOwFileId);
+            //        if (owFileId < 1) { throw new Exception("Invalid overwriteFileId value"); }
+            //    }
+            //}
 
-            // Check if file exists on the server before uploading
-            Dictionary<string, object> fileInfoIdentifier = new Dictionary<string, object>();
-            if (overwriteFile)
-            {
-                fileInfoIdentifier.Add("fileId", owFileId);
-            }
-            else
-            {
-                fileInfoIdentifier.Add("fileName", fInfo.Name);
-                if (srcIdentifier.TryGetValue("destFolderNames", out object tFolderNames))
-                {
-                    fileInfoIdentifier.Add("folderNames", tFolderNames);
-                }
+            //// Check if file exists on the server before uploading
+            //Dictionary<string, object> fileInfoIdentifier = new Dictionary<string, object>();
+            //if (overwriteFile)
+            //{
+            //    fileInfoIdentifier.Add("fileId", owFileId);
+            //}
+            //else
+            //{
+            //    fileInfoIdentifier.Add("fileName", fInfo.Name);
+            //    if (srcIdentifier.TryGetValue("destFolderNames", out object tFolderNames))
+            //    {
+            //        fileInfoIdentifier.Add("folderNames", tFolderNames);
+            //    }
 
-                if (srcIdentifier.TryGetValue("destFolderId", out object tFolderId))
-                {
-                    fileInfoIdentifier.Add("folderId", tFolderId);
-                }
-            }
+            //    if (srcIdentifier.TryGetValue("destFolderId", out object tFolderId))
+            //    {
+            //        fileInfoIdentifier.Add("folderId", tFolderId);
+            //    }
+            //}
 
-            Dictionary<string, object> apiFileInfoResult = this.getFileInfo(fileInfoIdentifier, out retCode, out string fileName, out ulong fileSize, out ulong fileTimestamp, out ulong overwriteFileAliasId);
-            if (overwriteFile && retCode == 404)
-            {
-                throw new Exception("Unable to Upload File, Overwrite Requested, but File Does Not Exist");
-            }
-            else if (!overwriteFile && retCode != 404)
-            {
-                // File exists, or error occurred
-                throw new Exception("Unable to Upload File, File with Same Name Already Exists in Destination Folder");
-            }
+            //Dictionary<string, object> apiFileInfoResult = this.getFileInfo(fileInfoIdentifier, out retCode, out string fileName, out ulong fileSize, out ulong fileTimestamp, out ulong overwriteFileAliasId);
+            //if (overwriteFile && retCode == 404)
+            //{
+            //    throw new Exception("Unable to Upload File, Overwrite Requested, but File Does Not Exist");
+            //}
+            //else if (!overwriteFile && retCode != 404)
+            //{
+            //    // File exists, or error occurred
+            //    throw new Exception("Unable to Upload File, File with Same Name Already Exists in Destination Folder");
+            //}
 
             this.dParams = srcIdentifier;
             this.url = this.BASE_API_URL + "api2/file/write";
@@ -1941,7 +1950,7 @@ namespace Stash
             retCode = 0;
             fileId = 0; fileAliasId = 0;
             Dictionary<string, object> retVal = null;
-            bool overwriteFile = false; UInt64 owFileId = 0;
+            //bool overwriteFile = false; UInt64 owFileId = 0;
             System.IO.FileInfo fInfo = new System.IO.FileInfo(fileNameIn);
             if (!fInfo.Exists)
             {
@@ -1951,50 +1960,51 @@ namespace Stash
             this.dParams = srcIdentifier;
             if (!this.validateParams("write")) { throw new ArgumentException("Invalid Input Parameters"); }
 
-            if (srcIdentifier.TryGetValue("overwriteFile", out object owFile))
-            {
-                overwriteFile = (owFile.ToString() == "1" ? true : false);
-                if (overwriteFile)
-                {
-                    if (!srcIdentifier.TryGetValue("overwriteFileId", out object objOwFileId))
-                    {
-                        throw new ArgumentException("overwriteFileId parameter not specified");
-                    }
-                    owFileId = Convert.ToUInt64(objOwFileId);
-                    if (owFileId < 1) { throw new Exception("Invalid overwriteFileId value"); }
-                }
-            }
+            // No need to check for existing file - overwrites are handled in the backend automatically
+            //if (srcIdentifier.TryGetValue("overwriteFile", out object owFile))
+            //{
+            //    overwriteFile = (owFile.ToString() == "1" ? true : false);
+            //    if (overwriteFile)
+            //    {
+            //        if (!srcIdentifier.TryGetValue("overwriteFileId", out object objOwFileId))
+            //        {
+            //            throw new ArgumentException("overwriteFileId parameter not specified");
+            //        }
+            //        owFileId = Convert.ToUInt64(objOwFileId);
+            //        if (owFileId < 1) { throw new Exception("Invalid overwriteFileId value"); }
+            //    }
+            //}
 
-            // Check if file exists on the server before uploading
-            Dictionary<string, object> fileInfoIdentifier = new Dictionary<string, object>();
-            if (overwriteFile)
-            {
-                fileInfoIdentifier.Add("fileId", owFileId);
-            }
-            else
-            {
-                fileInfoIdentifier.Add("fileName", fInfo.Name);
-                if (srcIdentifier.TryGetValue("destFolderNames", out object tFolderNames))
-                {
-                    fileInfoIdentifier.Add("folderNames", tFolderNames);
-                }
+            //// Check if file exists on the server before uploading
+            //Dictionary<string, object> fileInfoIdentifier = new Dictionary<string, object>();
+            //if (overwriteFile)
+            //{
+            //    fileInfoIdentifier.Add("fileId", owFileId);
+            //}
+            //else
+            //{
+            //    fileInfoIdentifier.Add("fileName", fInfo.Name);
+            //    if (srcIdentifier.TryGetValue("destFolderNames", out object tFolderNames))
+            //    {
+            //        fileInfoIdentifier.Add("folderNames", tFolderNames);
+            //    }
 
-                if (srcIdentifier.TryGetValue("destFolderId", out object tFolderId))
-                {
-                    fileInfoIdentifier.Add("folderId", tFolderId);
-                }
-            }
+            //    if (srcIdentifier.TryGetValue("destFolderId", out object tFolderId))
+            //    {
+            //        fileInfoIdentifier.Add("folderId", tFolderId);
+            //    }
+            //}
 
-            Dictionary<string, object> apiFileInfoResult = this.getFileInfo(fileInfoIdentifier, out retCode, out string fileName, out ulong fileSize, out ulong fileTimestamp, out ulong overwriteFileAliasId);
-            if (overwriteFile && retCode == 404)
-            {
-                throw new Exception("Unable to Upload File, Overwrite Requested, but File Does Not Exist");
-            }
-            else if (!overwriteFile && retCode != 404)
-            {
-                // File exists, or error occurred
-                throw new Exception("Unable to Upload File, File with Same Name Already Exists in Destination Folder");
-            }
+            //Dictionary<string, object> apiFileInfoResult = this.getFileInfo(fileInfoIdentifier, out retCode, out string fileName, out ulong fileSize, out ulong fileTimestamp, out ulong overwriteFileAliasId);
+            //if (overwriteFile && retCode == 404)
+            //{
+            //    throw new Exception("Unable to Upload File, Overwrite Requested, but File Does Not Exist");
+            //}
+            //else if (!overwriteFile && retCode != 404)
+            //{
+            //    // File exists, or error occurred
+            //    throw new Exception("Unable to Upload File, File with Same Name Already Exists in Destination Folder");
+            //}
 
             this.dParams = srcIdentifier;
             this.url = this.BASE_API_URL + "api2/file/writechunked";
