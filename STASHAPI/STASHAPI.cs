@@ -1816,7 +1816,7 @@ namespace Stash
             retCode = 0;
             fileId = 0; fileAliasId = 0;
             Dictionary<string, object> retVal = null;
-            bool overwriteFile = false; UInt64 owFileId = 0;
+            //bool overwriteFile = false; UInt64 owFileId = 0;
 
             System.IO.FileInfo fInfo = new System.IO.FileInfo(fileNameIn);
             if (!fInfo.Exists)
