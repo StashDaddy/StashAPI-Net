@@ -1,4 +1,14 @@
-﻿using System;                           // Reference: System
+﻿/* This is a Visual Studio Shared Project
+ * To use this project, add the project to your existing solution, then add a reference to the shared
+ * project from your existing code/application project.
+ * Structure:
+ * - Solution
+ * -- Code .net/c#/vb project
+ * -- STASHAPI shared project
+ * 
+ * Important Note - you must add the following references to you code/application project
+ */
+using System;                           // Reference: System
 using System.Text;                      // Reference: System
 using System.Text.RegularExpressions;   // Reference: System
 using System.Security.Cryptography;     // Reference: System
@@ -23,7 +33,9 @@ namespace Stash
         public const int STASHAPI_FILE_BUFFER_SIZE = 1024;  // Input / Output buffer for reading / writing files
         public const string BASE_VAULT_FOLDER = "My Home";
         public const string BASE_URL = "https://www.stage.stashbusiness.com/";      // This is the URL to send requests to, can be overrided by BASE_API_URL in the constructor
-        public const string ENC_ALG = "aes-256-cbc";        // Encryption algorithm for use in encryptString & decryptString()
+        public const string ENC_ALG = "aes-256-cbc";        // Encryption algorithm for use in encryptString & decryptString(), encryptFile() & decryptFile(), uses an IV of 16 bytes
+        public const int STASH_ENC_BLOCKSIZE = 1024;        // The size of the data block to encrypt; must match the blocksize used in the decryption platform - IV.length
+        public const int STASH_DEC_BLOCKSIZE = 1040;        // The size of the data block to decrypt; must be STASH_ENC_BLOCKSIZE + IV.length; must match the blocksize used in the encryption platform + IV.length
 
         private string _api_id;             // The API_ID For your account
         public string api_id
@@ -164,7 +176,10 @@ namespace Stash
             if (!dataIn.TryGetValue("api_timestamp", out object apiTimestamp) || apiTimestamp == null || apiTimestamp.ToString() == "") { throw new System.Exception("Input array missing api_timestamp for signature calculation"); }
             if (dataIn.ContainsKey("api_signature")) { dataIn.Remove("api_signature"); }
 
-            strToSign = Http_build_query(dataIn);
+            // Replace this with json_encoded string of dataIn, unescaped slashes
+            //strToSign = Http_build_query(dataIn);
+            JavaScriptSerializer serializer = new JavaScriptSerializer();
+            strToSign = serializer.Serialize(dataIn);
 
             sig = Hash_hmac("sha256", strToSign, this.api_pw);
 
@@ -180,6 +195,46 @@ namespace Stash
             return this.api_signature;
         }
 
+        // Encrypts a file with AES-256-CBC; encrypts a file in individual blocks
+        // Cross-platform compatible; must use same (DEC_BLOCKSIZE - IV.Length) as the platform used for decryption
+        public bool EncryptFileChunked(string fileName, out string encFileName, out string errMsg)
+        {
+            errMsg = "";
+            encFileName = fileName + ".enc";
+            byte[] pt;
+            byte[] ct;
+
+            if (! File.Exists(fileName)) { throw new ArgumentException("Input File Does Not Exist"); }
+
+            using (BinaryWriter wrt = new BinaryWriter(new FileStream(encFileName, FileMode.Create, FileAccess.Write, FileShare.Read)))
+            using (BinaryReader rdr = new BinaryReader(File.OpenRead(fileName)))
+            {
+                long fileLen = rdr.BaseStream.Length;
+                long counter = 0;
+                while (counter < fileLen)
+                {
+                    if (fileLen - counter > STASH_ENC_BLOCKSIZE)
+                    {
+                        // First + following blocks up to but not including last block of file unless its an even blocksize
+                        pt = new byte[STASH_ENC_BLOCKSIZE];
+                        pt = rdr.ReadBytes(STASH_ENC_BLOCKSIZE);
+                        counter += STASH_ENC_BLOCKSIZE;
+                    }
+                    else
+                    {
+                        // Last block
+                        pt = new byte[fileLen - counter];
+                        pt = rdr.ReadBytes((int)(fileLen - counter));
+                        counter = fileLen;
+                    }
+
+                    ct = EncryptString(pt);
+                    wrt.Write(ct);
+                }
+            }  
+            return true;
+        }
+        
         // Encrypts a String with the API_PW
         public string EncryptString(string strString, bool returnHexBits)
         {
@@ -188,7 +243,7 @@ namespace Stash
 
             if (strString == "") { return ""; }
             if (this.api_pw == "") { return ""; }
-            if (this.api_pw.Length < 32) { throw new ArgumentException("API_PW must be at least 32 characters"); }//if (this.api_pw.Length < 32) { throw new ArgumentException("API_PW must be at least 32 characters"); }
+            if (this.api_pw.Length < 32) { throw new ArgumentException("API_PW must be at least 32 characters"); }
 
             Aes crypto = Aes.Create();
             crypto.Key = Encoding.ASCII.GetBytes(this.api_pw);
@@ -196,11 +251,11 @@ namespace Stash
             crypto.Padding = PaddingMode.PKCS7;
 
             ICryptoTransform encryptor = crypto.CreateEncryptor(crypto.Key, crypto.IV);
-            using (System.IO.MemoryStream msEncrypt = new System.IO.MemoryStream())
+            using (MemoryStream msEncrypt = new MemoryStream())
             {
                 using (CryptoStream csEncrypt = new CryptoStream(msEncrypt, encryptor, CryptoStreamMode.Write))
                 {
-                    using (System.IO.StreamWriter swEncrypt = new System.IO.StreamWriter(csEncrypt))
+                    using (StreamWriter swEncrypt = new StreamWriter(csEncrypt))
                     {
                         swEncrypt.Write(strString);
                     }
@@ -231,13 +286,9 @@ namespace Stash
                 if (returnHexBits)
                 {
                     retVal = retVal + Convert.ToInt32(tRetVal[i]).ToString("X2");
-                    //retVal = retVal + Hex(strRetVal[i]).PadLeft(2, "0");
-                    //retVal = retVal + Convert.ToInt32(strRetVal[i].ToString(), 16).ToString().PadLeft(2, '0');
                 }
                 else
                 {
-                    //retVal = retVal + Chr(tRetVal[i].ToString());
-                    //retVal = retVal + (char)strRetVal[i];
                     retVal = retVal + tRetVal[i].ToString();
                 }
             }
@@ -251,11 +302,110 @@ namespace Stash
             return retVal;
         }
 
-        /*
+        // Encrypts a set of bytes with the API_PW
+        public byte[] EncryptString(byte[] strString)
+        {
+            byte[] retVal;
+            byte[] ct;
+
+            if (strString.Length < 1 ) { throw new ArgumentException("Input Bytes are Empty"); }
+            if (this.api_pw == "") { return null; }
+            if (this.api_pw.Length < 32) { throw new ArgumentException("API_PW must be at least 32 characters"); }//if (this.api_pw.Length < 32) { throw new ArgumentException("API_PW must be at least 32 characters"); }
+
+            Aes crypto = Aes.Create();
+            crypto.Key = Encoding.ASCII.GetBytes(this.api_pw);
+            crypto.Mode = CipherMode.CBC;
+            crypto.Padding = PaddingMode.PKCS7;
+
+            ICryptoTransform encryptor = crypto.CreateEncryptor(crypto.Key, crypto.IV);
+            using (MemoryStream msEncrypt = new MemoryStream(strString))
+            using (CryptoStream csEncrypt = new CryptoStream(msEncrypt, encryptor, CryptoStreamMode.Read))
+            using (BinaryReader srEncrypt = new BinaryReader(csEncrypt))
+            {
+                ct = srEncrypt.ReadBytes(1024);
+            }
+
+            retVal = new byte[ct.Length + crypto.IV.Length];
+            Buffer.BlockCopy(crypto.IV, 0, retVal, 0, crypto.IV.Length);
+            Buffer.BlockCopy(ct, 0, retVal, crypto.IV.Length, ct.Length);
+
+            return retVal;
+        }
+
+        // Decrypts a File with the API_PW
+        // Buffer Block size must match StashEncryption.php::STASH_DEC_BLOCKSIZE to be cross-platform compatible
+        public bool DecryptFileChunked(string fileName, out string decFileName, out string errMsg)
+        {
+            const int STASH_DEC_BLOCKSIZE = 1040;
+            decFileName = fileName + ".dec";
+            errMsg = "";
+            byte[] strIv;                                       // The Init Vector
+            long fileLen = 0;                                   // Stores the file length of the CT file
+            byte[] ct;                                          // Working buffer for converting CT to PT
+            byte[] pt;                                          // Working output buffer containing the PT
+            Aes crypto;
+            try
+            {
+                crypto = Aes.Create();
+                strIv = new byte[crypto.IV.Length];          // Build the init vector byte array
+
+                // Get IV from file
+                using (BinaryReader rdr = new BinaryReader(File.OpenRead(fileName)))
+                {
+                    // Read IV length bytes out
+                    strIv = rdr.ReadBytes(crypto.IV.Length);
+                    fileLen = rdr.BaseStream.Length;
+                }
+
+                crypto.Mode = CipherMode.CBC;
+                crypto.Key = Encoding.ASCII.GetBytes(this.api_pw);
+                crypto.IV = strIv;
+                crypto.Padding = PaddingMode.PKCS7;
+
+                // Read CT from file and decrypt it, and write it out
+                long offset = strIv.Length;
+                using (BinaryWriter wrt = new BinaryWriter(File.OpenWrite(decFileName)))
+                using (BinaryReader rdr = new BinaryReader(File.OpenRead(fileName)))
+                using (ICryptoTransform decryptor = crypto.CreateDecryptor(crypto.Key, crypto.IV))
+                {
+                    rdr.BaseStream.Seek(offset, SeekOrigin.Begin);
+                    // Need loop here to read entire file in blocks
+                    while (offset < fileLen)
+                    {
+                        if (fileLen - offset > STASH_DEC_BLOCKSIZE)
+                        {
+                            ct = new byte[STASH_DEC_BLOCKSIZE];
+                            ct = rdr.ReadBytes(STASH_DEC_BLOCKSIZE);
+                            offset += STASH_DEC_BLOCKSIZE;
+                        }
+                        else
+                        {
+                            ct = new byte[fileLen - offset];
+                            ct = rdr.ReadBytes((int)(fileLen - offset));
+                            offset = fileLen;
+                        }
+
+                        using (MemoryStream msDecrypt = new MemoryStream(ct))
+                        using (CryptoStream csDecrypt = new CryptoStream(msDecrypt, decryptor, CryptoStreamMode.Read))
+                        using (BinaryReader srDecrypt = new BinaryReader(csDecrypt))
+                        {
+                            pt = srDecrypt.ReadBytes(STASH_DEC_BLOCKSIZE);
+                            wrt.Write(pt);
+                        }
+                    }
+
+                    return true;
+                }
+            } catch (Exception e)
+            {
+                errMsg = e.Message;
+                return false;
+            }
+        }
+
         // Decrypts a String with the API_PW
         public string DecryptString(string strString, bool inHexBits)
         {
-            //string retVal = "";
             object tRetVal;
 
             if (strString == "") { return ""; }
@@ -266,20 +416,32 @@ namespace Stash
             {
                 strString = hex2bin(strString);
             }
-            //byte[] strBytes = str2arr(strString);       // Convert input string to a byte array to create IV and CT arrays
-            byte[] strBytes = Encoding.ASCII.GetBytes(strString);
 
-            System.Security.Cryptography.Aes crypto = System.Security.Cryptography.Aes.Create();
+            // Convert input string to a byte array to create IV and CT arrays
+            // Assume input array after hex2bin has null padding elements between chars in the array, e.g. 41-0-38-0-133-0-208...
+            byte[] strBytesUni = Encoding.Unicode.GetBytes(strString);
+            byte[] strBytes = new byte[strBytesUni.Length/2];
+            int counter = 0;
+            for (int i = 0; i < strBytesUni.Length; i++)
+            {
+                if (strBytesUni[i] != 0)
+                {
+                    strBytes[counter] = strBytesUni[i];
+                    counter++;
+                }
+            }
 
-            byte[] strIv = new byte[crypto.IV.Length - 1];         // Build the init vector byte array
-            for (int i = 0; i < crypto.IV.Length - 1; i++)
+            Aes crypto = Aes.Create();
+
+            byte[] strIv = new byte[crypto.IV.Length];         // Build the init vector byte array
+            for (int i = 0; i < crypto.IV.Length; i++)
             {
                 strIv[i] = strBytes[i];
             }
 
-            byte[] strCt = new byte[strString.Length - crypto.IV.Length - 1];     // Build the ciphertext byte array
-            int counter = 0;
-            for (int i = crypto.IV.Length; i < strString.Length - 1; i++)
+            byte[] strCt = new byte[strString.Length - crypto.IV.Length];     // Build the ciphertext byte array
+            counter = 0;
+            for (int i = crypto.IV.Length; i < strString.Length; i++)
             {
                 strCt[counter] = strBytes[i];
                 counter++;
@@ -293,15 +455,14 @@ namespace Stash
             if (strString.Length < crypto.IV.Length) { throw new Exception("Insufficient Input Data to Decrypt"); }
 
             ICryptoTransform decryptor = crypto.CreateDecryptor(crypto.Key, crypto.IV);
-            System.IO.MemoryStream msDecrypt = new System.IO.MemoryStream(strCt);
+            MemoryStream msDecrypt = new MemoryStream(strCt);
             CryptoStream csDecrypt = new CryptoStream(msDecrypt, decryptor, CryptoStreamMode.Read);
-            System.IO.StreamReader srDecrypt = new System.IO.StreamReader(csDecrypt);
+            StreamReader srDecrypt = new StreamReader(csDecrypt);
             tRetVal = srDecrypt.ReadToEnd();
 
             return tRetVal.ToString();
         }
-        */
-
+        
         // Checks the parameter and value for sanity and compliance with rules
         public bool isValid(Dictionary<string, object> arrDataIn)
         {
@@ -444,7 +605,7 @@ namespace Stash
         }
 
         // Downloads a file from the Vault and stores it in _fileNameIn_
-        public string sendDownloadRequest(string fileNameIn)
+        public string sendDownloadRequest(string fileNameIn, int timeOut)
         {
             string payload = "";
 
@@ -483,6 +644,8 @@ namespace Stash
                 objHWR.Method = WebRequestMethods.Http.Post;
                 objHWR.ContentType = "application/json";
                 objHWR.ContentLength = payloadBytes.LongLength;
+                objHWR.Timeout = timeOut * 1000;
+
                 sendStream = objHWR.GetRequestStream();
                 sendStream.Write(payloadBytes, 0, payloadBytes.Length);
                 sendStream.Close();
@@ -542,8 +705,8 @@ namespace Stash
             }
         }
 
-        // Uploads a file to the server
-        public string SendFileRequest(string fileNameIn)
+        // Uploads a file to the server with a set timeOut
+        public string SendFileRequest(string fileNameIn, int timeOut)
         {
             string retVal = "";
 
@@ -572,7 +735,7 @@ namespace Stash
 
             HttpWebRequest requestToServer = (HttpWebRequest)WebRequest.Create(this.url);
             string boundaryString = "----" + genRandomString(24);
-            requestToServer.Timeout = 180000;
+            requestToServer.Timeout = timeOut * 1000; 
             requestToServer.AllowWriteStreamBuffering = false;
             requestToServer.Method = WebRequestMethods.Http.Post;
             requestToServer.ContentType = "multipart/form-data; boundary=" + boundaryString;
@@ -668,7 +831,7 @@ namespace Stash
 
         // Uploads a file to the server in chunks. While the functions are awaited, the chunks are being uploaded to the file synchronously.
         //TODO: Update function to upload chunks asynchronously
-        public async Task<string> SendFileRequestChunked(string fileNameIn, object objStash, System.Threading.CancellationTokenSource ct)
+        public async Task<string> SendFileRequestChunked(string fileNameIn, int chunkSize, int timeOut, Action<ulong, ulong,string> callback, System.Threading.CancellationTokenSource ct)
         {
             string retVal = "";
 
@@ -688,13 +851,19 @@ namespace Stash
               .Select(s => s[random.Next(s.Length)]).ToArray());
             chunkedParams.Add("temp_name", temp_name);
 
-            int chunkSize = 1000000; // Upload 1mb at a time
+            //int chunkSize = 1000000;
+
+            if(uploadFile.Length < chunkSize && (int)uploadFile.Length > 0)
+            {
+                chunkSize = Convert.ToInt32(uploadFile.Length);  // if the file is smaller than the chunk size, upload the file as one chunk
+            }
+
             byte[] buffer = new byte[chunkSize];
             FileStream fileStream = null;
             try
             {
                 fileStream = new FileStream(fileNameIn, FileMode.Open, FileAccess.Read,
-                FileShare.Read, bufferSize: chunkSize, useAsync: true);
+                    FileShare.Read, bufferSize: chunkSize, useAsync: true);
                 Int32 bytesRead = 0;
                 int i = 1;
                 var responseString = string.Empty;
@@ -747,7 +916,11 @@ namespace Stash
                 var stopWatch = System.Diagnostics.Stopwatch.StartNew();
 
                 //Begin reading the file and send each chunk to the server.
-                while ((bytesRead = fileStream.Read(buffer, 0, buffer.Length)) > 0)
+                // Do the do/while loop at least once to handle zero-byte files
+                bytesRead = fileStream.Read(buffer, 0, buffer.Length);
+
+                //while ((bytesRead = fileStream.Read(buffer, 0, buffer.Length)) > 0)
+                do
                 {
                     //Check cancellation token. If the user clicks stop, the upload will be aborted.
                     bool isCancelled = ct.IsCancellationRequested;
@@ -757,8 +930,9 @@ namespace Stash
                     }
                     else
                     {
-                        double chunks = fileStream.Length / chunkSize;
-                        var totalChunks = Math.Ceiling(chunks) + 1;
+
+                        double chunks = (double)fileStream.Length / (double)chunkSize;
+                        var totalChunks = Math.Ceiling(chunks);
 
                         if (i == 3)
                         {
@@ -774,9 +948,9 @@ namespace Stash
                         {
                             chunkedParams.Add("chunkedUpload", "true");
                         }
-
                         chunkedParams.Add("progress", i + "/" + totalChunks);
 
+                        int pos = fileNameIn.LastIndexOf("\\") + 1;
                         var apiParameters = new JavaScriptSerializer().Serialize(apiParams);
                         var chunkedParameters = new JavaScriptSerializer().Serialize(chunkedParams);
                         ASCIIEncoding ascii = new ASCIIEncoding();
@@ -785,8 +959,9 @@ namespace Stash
                         byte[] strParamsBytes = ascii.GetBytes(apiParameters);
                         byte[] chunkedParamBytes = ascii.GetBytes(chunkedParameters);
                         HttpClient requestToServer = new HttpClient();
+                        requestToServer.Timeout = new TimeSpan(0, 0, timeOut);
                         MultipartFormDataContent form = new MultipartFormDataContent();
-                        form.Add(data, "file", fileNameIn);
+                        form.Add(data, "file", fileNameIn.Substring(pos, fileNameIn.Length - pos));
                         form.Add(new ByteArrayContent(strParamsBytes), "params");
                         form.Add(new ByteArrayContent(chunkedParamBytes), "chunkedParams");
 
@@ -795,22 +970,16 @@ namespace Stash
                             HttpResponseMessage response = await requestToServer.PostAsync(url, form);
 
                             retVal = response.Content.ReadAsStringAsync().Result;
-
                             ulong fileLength = Convert.ToUInt64(fileStream.Length);
-                            ulong processedBytes = Convert.ToUInt64(buffer.Length * i);
+                            ulong processedBytes = (ulong)buffer.Length * (ulong)i;
                             ulong total = Convert.ToUInt64(fileLength - processedBytes);
-                            if (fileLength < Convert.ToUInt64(buffer.Length))
+
+
+                            if (i < totalChunks)
                             {
-                                // ToDo Replace with callback (see Issue #9, STASHAPI-NET-Dev)
-                                //objStash.TotalFileSizeMax = fileLength;
-                                //objStash.NumTotalFileSizes = fileLength;
+                                callback(fileLength, processedBytes, fileNameIn);
                             }
-                            else
-                            {
-                                // ToDo Replace with callback (see Issue #9, STASHAPI-NET-Dev)
-                                //objStash.TotalFileSizeMax = fileLength;
-                                //objStash.NumTotalFileSizes = total;
-                            }
+
                             if ((fileLength - processedBytes) < Convert.ToUInt64(chunkSize))
                             {
                                 buffer = new byte[fileLength - processedBytes];
@@ -825,7 +994,7 @@ namespace Stash
                         }
                         i++;
                     }
-                }
+                } while ((bytesRead = fileStream.Read(buffer, 0, buffer.Length)) > 0);
             }
             catch (Exception e)
             {
@@ -866,7 +1035,9 @@ namespace Stash
                     string[] strFolderNames = (string[])tFolderNames;
                     if (strFolderNames.Length > 0) { return true; }
                 }
-                throw new ArgumentException("Source Parameters Invalid - folderId or folderNames MUST be specified");
+                //throw new ArgumentException("Source Parameters Invalid - folderId or folderNames MUST be specified");
+                if (this.dParams.TryGetValue("filePath", out object tFilePath) && tFilePath != null && tFilePath.ToString() != "") { return true; }
+                throw new ArgumentException("Source Parameters Invalid - folderId or folderNames or filePath MUST be specified");
             }
             else
             {
@@ -887,7 +1058,9 @@ namespace Stash
                         if (strFolderNames.Length > 0) { return true; }
                     }
                 }
-                throw new ArgumentException("Source Parameters Invalid - fileId or fileName plus either folderId or folderNames MUST be specified");
+                //throw new ArgumentException("Source Parameters Invalid - fileId or fileName plus either folderId or folderNames MUST be specified");
+                if (this.dParams.TryGetValue("filePath", out object tFilePath) && tFilePath != null && tFilePath.ToString() != "") { return true; }
+                throw new ArgumentException("Source Parameters Invalid - fileId or fileName plus either folderId or folderNames, or filePath MUST be specified");
             }
         }
 
@@ -909,6 +1082,7 @@ namespace Stash
             if (folderOnly)
             {
                 if (this.dParams.TryGetValue("destFolderId", out object tDestFolderId) && tDestFolderId != null && Convert.ToUInt64(tDestFolderId) > 0) { return true; }
+                if (this.dParams.TryGetValue("destFilePath", out object tDestFilePath) && tDestFilePath != null && tDestFilePath.ToString() != "") { return true; }
                 if (this.dParams.TryGetValue("destFolderNames", out object tDestFolderNames) && tDestFolderNames != null)
                 {
                     string[] strDestFolderNames = (string[])tDestFolderNames;
@@ -922,6 +1096,7 @@ namespace Stash
                 {
                     if (nameOnly) { return true; }
                     if (this.dParams.TryGetValue("destFolderId", out object tDestFolderId) && tDestFolderId != null && Convert.ToUInt64(tDestFolderId) > 0) { return true; }
+                    if (this.dParams.TryGetValue("destFilePath", out object tDestFilePath) && tDestFilePath != null && tDestFilePath.ToString() != "") { return true; }
                     if (this.dParams.TryGetValue("destFolderNames", out object tDestFolderNames) && tDestFolderNames != null)
                     {
                         string[] strDestFolderNames = (string[])tDestFolderNames;
@@ -1253,6 +1428,10 @@ namespace Stash
                     this.validateSourceParams(true, false);
                 }
                 else if (opIn == "checkcreds")
+                {
+                    this.validateCredParams(true, true, false, false);
+                }
+                else if (opIn == "checkcredsad")
                 {
                     this.validateCredParams(true, true, false, false);
                 }
@@ -1590,7 +1769,7 @@ namespace Stash
         // STASH API HELPER FUNCTIONS
         // *********************************************************************************************
         // Downloads a file from the user's vault
-        public Dictionary<string, object> getFile(Dictionary<string, object> srcIdentifier, string fileNameOut, out int retCode)
+        public Dictionary<string, object> getFile(Dictionary<string, object> srcIdentifier, string fileNameOut, int timeOut, out int retCode)
         {
             string apiResult = "";
             retCode = 0;
@@ -1608,7 +1787,7 @@ namespace Stash
 
             if (!this.validateParams("read")) { throw new ArgumentException("Invalid Input Parameters"); }
 
-            apiResult = this.sendDownloadRequest(fileNameOut);
+            apiResult = this.sendDownloadRequest(fileNameOut, timeOut);
             if (this.dParams != null) { this.dParams.Clear(); }
 
             if (apiResult == "1")
@@ -1616,7 +1795,7 @@ namespace Stash
                 retCode = 200;
                 retVal.Add("code", "200");
                 retVal.Add("message", "OK");
-                retVal.Add("fileName", fileNameOut);
+                retVal.Add("fileName", fileNameOut);                
             }
             else
             {
@@ -1639,13 +1818,13 @@ namespace Stash
         }
 
         // Uploads file to the user's Vault
-        public Dictionary<string, object> putFile(string fileNameIn, Dictionary<string, object> srcIdentifier, out int retCode, out UInt64 fileId, out UInt64 fileAliasId)
+        public Dictionary<string, object> putFile(string fileNameIn, Dictionary<string, object> srcIdentifier, int timeOut, out int retCode, out UInt64 fileId, out UInt64 fileAliasId)
         {
             string apiResult = "";
             retCode = 0;
             fileId = 0; fileAliasId = 0;
             Dictionary<string, object> retVal = null;
-            bool overwriteFile = false; UInt64 owFileId = 0;
+            //bool overwriteFile = false; UInt64 owFileId = 0;
 
             System.IO.FileInfo fInfo = new System.IO.FileInfo(fileNameIn);
             if (!fInfo.Exists)
@@ -1656,56 +1835,57 @@ namespace Stash
             this.dParams = srcIdentifier;
             if (!this.validateParams("write")) { throw new ArgumentException("Invalid Input Parameters"); }
 
-            if (srcIdentifier.TryGetValue("overwriteFile", out object owFile))
-            {
-                overwriteFile = (owFile.ToString() == "1" ? true : false);
-                if (overwriteFile)
-                {
-                    if (!srcIdentifier.TryGetValue("overwriteFileId", out object objOwFileId))
-                    {
-                        throw new ArgumentException("overwriteFileId parameter not specified");
-                    }
-                    owFileId = Convert.ToUInt64(objOwFileId);
-                    if (owFileId < 1) { throw new Exception("Invalid overwriteFileId value"); }
-                }
-            }
+            // No need to check for existing file - overwrites are handled in the backend automatically
+            //if (srcIdentifier.TryGetValue("overwriteFile", out object owFile))
+            //{
+            //    overwriteFile = (owFile.ToString() == "1" ? true : false);
+            //    if (overwriteFile)
+            //    {
+            //        if (!srcIdentifier.TryGetValue("overwriteFileId", out object objOwFileId))
+            //        {
+            //            throw new ArgumentException("overwriteFileId parameter not specified");
+            //        }
+            //        owFileId = Convert.ToUInt64(objOwFileId);
+            //        if (owFileId < 1) { throw new Exception("Invalid overwriteFileId value"); }
+            //    }
+            //}
 
-            // Check if file exists on the server before uploading
-            Dictionary<string, object> fileInfoIdentifier = new Dictionary<string, object>();
-            if (overwriteFile)
-            {
-                fileInfoIdentifier.Add("fileId", owFileId);
-            }
-            else
-            {
-                fileInfoIdentifier.Add("fileName", fInfo.Name);
-                if (srcIdentifier.TryGetValue("destFolderNames", out object tFolderNames))
-                {
-                    fileInfoIdentifier.Add("folderNames", tFolderNames);
-                }
+            //// Check if file exists on the server before uploading
+            //Dictionary<string, object> fileInfoIdentifier = new Dictionary<string, object>();
+            //if (overwriteFile)
+            //{
+            //    fileInfoIdentifier.Add("fileId", owFileId);
+            //}
+            //else
+            //{
+            //    fileInfoIdentifier.Add("fileName", fInfo.Name);
+            //    if (srcIdentifier.TryGetValue("destFolderNames", out object tFolderNames))
+            //    {
+            //        fileInfoIdentifier.Add("folderNames", tFolderNames);
+            //    }
 
-                if (srcIdentifier.TryGetValue("destFolderId", out object tFolderId))
-                {
-                    fileInfoIdentifier.Add("folderId", tFolderId);
-                }
-            }
+            //    if (srcIdentifier.TryGetValue("destFolderId", out object tFolderId))
+            //    {
+            //        fileInfoIdentifier.Add("folderId", tFolderId);
+            //    }
+            //}
 
-            Dictionary<string, object> apiFileInfoResult = this.getFileInfo(fileInfoIdentifier, out retCode, out string fileName, out ulong fileSize, out ulong fileTimestamp, out ulong overwriteFileAliasId);
-            if (overwriteFile && retCode == 404)
-            {
-                throw new Exception("Unable to Upload File, Overwrite Requested, but File Does Not Exist");
-            }
-            else if (!overwriteFile && retCode != 404)
-            {
-                // File exists, or error occurred
-                throw new Exception("Unable to Upload File, File with Same Name Already Exists in Destination Folder");
-            }
+            //Dictionary<string, object> apiFileInfoResult = this.getFileInfo(fileInfoIdentifier, out retCode, out string fileName, out ulong fileSize, out ulong fileTimestamp, out ulong overwriteFileAliasId);
+            //if (overwriteFile && retCode == 404)
+            //{
+            //    throw new Exception("Unable to Upload File, Overwrite Requested, but File Does Not Exist");
+            //}
+            //else if (!overwriteFile && retCode != 404)
+            //{
+            //    // File exists, or error occurred
+            //    throw new Exception("Unable to Upload File, File with Same Name Already Exists in Destination Folder");
+            //}
 
             this.dParams = srcIdentifier;
             this.url = this.BASE_API_URL + "api2/file/write";
             if (!this.validateParams("write")) { throw new ArgumentException("Invalid Input Parameters"); }
 
-            apiResult = this.SendFileRequest(fileNameIn);
+            apiResult = this.SendFileRequest(fileNameIn, timeOut);
             if (this.dParams != null) { this.dParams.Clear(); }
 
             retCode = GetResponseCodeDict(apiResult, out retVal);
@@ -1737,14 +1917,48 @@ namespace Stash
             return retVal;
         }
 
+        // Uploads a file to the Vault Support system
+        // This is used to transmit log/troubleshooting data from clients to a central repository on the server
+        public Dictionary<string, object> putFileSupport(string fileNameIn, int timeOut, out int retCode, out string msg, out string extMsg)
+        {
+            string apiResult = ""; msg = ""; extMsg = ""; retCode = 0;
+            Dictionary<string, object> retVal = null;
+
+            System.IO.FileInfo fInfo = new System.IO.FileInfo(fileNameIn);
+            if (!fInfo.Exists)
+            {
+                throw new Exception("Incorrect Input File Path or File Does Not Exist");
+            }
+
+            //this.dParams = srcIdentifier;
+            this.url = this.BASE_API_URL + "api2/support/writesupport";
+            //if (!this.validateParams("write")) { throw new ArgumentException("Invalid Input Parameters"); }
+
+            apiResult = this.SendFileRequest(fileNameIn, timeOut);
+            //if (this.dParams != null) { this.dParams.Clear(); }
+
+            retCode = GetResponseCodeDict(apiResult, out retVal);
+
+            if (retCode != 200)
+            {
+                GetError(retVal, out retCode, out msg, out extMsg);
+                if (this.verbosity)
+                {
+                    Console.WriteLine("- Error Occurred putFileSupport, Code: " + retCode.ToString() + " Message: " + (msg != null ? msg.ToString() : "Not Available") + " Extended Message: " + (extMsg != null ? extMsg.ToString() : "Not Available"));
+                }
+            }
+
+            return retVal;
+        }
+
         // Uploads file to the user's Vault using Chunks
-        public Dictionary<string, object> putFileChunked(string fileNameIn, Dictionary<string, object> srcIdentifier, object objStash, System.Threading.CancellationTokenSource ct, out int retCode, out UInt64 fileId, out UInt64 fileAliasId)
+        public Dictionary<string, object> putFileChunked(string fileNameIn, Dictionary<string, object> srcIdentifier, int chunkSize, int timeOut, Action<ulong, ulong, string> callback, System.Threading.CancellationTokenSource ct, out int retCode, out UInt64 fileId, out UInt64 fileAliasId)
         {
             string apiResult = "";
             retCode = 0;
             fileId = 0; fileAliasId = 0;
             Dictionary<string, object> retVal = null;
-            bool overwriteFile = false; UInt64 owFileId = 0;
+            //bool overwriteFile = false; UInt64 owFileId = 0;
             System.IO.FileInfo fInfo = new System.IO.FileInfo(fileNameIn);
             if (!fInfo.Exists)
             {
@@ -1754,50 +1968,51 @@ namespace Stash
             this.dParams = srcIdentifier;
             if (!this.validateParams("write")) { throw new ArgumentException("Invalid Input Parameters"); }
 
-            if (srcIdentifier.TryGetValue("overwriteFile", out object owFile))
-            {
-                overwriteFile = (owFile.ToString() == "1" ? true : false);
-                if (overwriteFile)
-                {
-                    if (!srcIdentifier.TryGetValue("overwriteFileId", out object objOwFileId))
-                    {
-                        throw new ArgumentException("overwriteFileId parameter not specified");
-                    }
-                    owFileId = Convert.ToUInt64(objOwFileId);
-                    if (owFileId < 1) { throw new Exception("Invalid overwriteFileId value"); }
-                }
-            }
+            // No need to check for existing file - overwrites are handled in the backend automatically
+            //if (srcIdentifier.TryGetValue("overwriteFile", out object owFile))
+            //{
+            //    overwriteFile = (owFile.ToString() == "1" ? true : false);
+            //    if (overwriteFile)
+            //    {
+            //        if (!srcIdentifier.TryGetValue("overwriteFileId", out object objOwFileId))
+            //        {
+            //            throw new ArgumentException("overwriteFileId parameter not specified");
+            //        }
+            //        owFileId = Convert.ToUInt64(objOwFileId);
+            //        if (owFileId < 1) { throw new Exception("Invalid overwriteFileId value"); }
+            //    }
+            //}
 
-            // Check if file exists on the server before uploading
-            Dictionary<string, object> fileInfoIdentifier = new Dictionary<string, object>();
-            if (overwriteFile)
-            {
-                fileInfoIdentifier.Add("fileId", owFileId);
-            }
-            else
-            {
-                fileInfoIdentifier.Add("fileName", fInfo.Name);
-                if (srcIdentifier.TryGetValue("destFolderNames", out object tFolderNames))
-                {
-                    fileInfoIdentifier.Add("folderNames", tFolderNames);
-                }
+            //// Check if file exists on the server before uploading
+            //Dictionary<string, object> fileInfoIdentifier = new Dictionary<string, object>();
+            //if (overwriteFile)
+            //{
+            //    fileInfoIdentifier.Add("fileId", owFileId);
+            //}
+            //else
+            //{
+            //    fileInfoIdentifier.Add("fileName", fInfo.Name);
+            //    if (srcIdentifier.TryGetValue("destFolderNames", out object tFolderNames))
+            //    {
+            //        fileInfoIdentifier.Add("folderNames", tFolderNames);
+            //    }
 
-                if (srcIdentifier.TryGetValue("destFolderId", out object tFolderId))
-                {
-                    fileInfoIdentifier.Add("folderId", tFolderId);
-                }
-            }
+            //    if (srcIdentifier.TryGetValue("destFolderId", out object tFolderId))
+            //    {
+            //        fileInfoIdentifier.Add("folderId", tFolderId);
+            //    }
+            //}
 
-            Dictionary<string, object> apiFileInfoResult = this.getFileInfo(fileInfoIdentifier, out retCode, out string fileName, out ulong fileSize, out ulong fileTimestamp, out ulong overwriteFileAliasId);
-            if (overwriteFile && retCode == 404)
-            {
-                throw new Exception("Unable to Upload File, Overwrite Requested, but File Does Not Exist");
-            }
-            else if (!overwriteFile && retCode != 404)
-            {
-                // File exists, or error occurred
-                throw new Exception("Unable to Upload File, File with Same Name Already Exists in Destination Folder");
-            }
+            //Dictionary<string, object> apiFileInfoResult = this.getFileInfo(fileInfoIdentifier, out retCode, out string fileName, out ulong fileSize, out ulong fileTimestamp, out ulong overwriteFileAliasId);
+            //if (overwriteFile && retCode == 404)
+            //{
+            //    throw new Exception("Unable to Upload File, Overwrite Requested, but File Does Not Exist");
+            //}
+            //else if (!overwriteFile && retCode != 404)
+            //{
+            //    // File exists, or error occurred
+            //    throw new Exception("Unable to Upload File, File with Same Name Already Exists in Destination Folder");
+            //}
 
             this.dParams = srcIdentifier;
             this.url = this.BASE_API_URL + "api2/file/writechunked";
@@ -1805,7 +2020,7 @@ namespace Stash
 
             // apiResult = this.SendFileRequest(fileNameIn);
 
-            apiResult = this.SendFileRequestChunked(fileNameIn, objStash, ct).Result;
+            apiResult = this.SendFileRequestChunked(fileNameIn, chunkSize, timeOut, callback, ct).Result;
             if (this.dParams != null) { this.dParams.Clear(); }
 
             retCode = GetResponseCodeDict(apiResult, out retVal);
@@ -1830,7 +2045,7 @@ namespace Stash
                 GetError(retVal, out retCode, out string msg, out string extMsg);
                 if (this.verbosity)
                 {
-                    Console.WriteLine("- Error Occurred putFile, Code: " + retCode.ToString() + " Message: " + (msg != null ? msg.ToString() : "Not Available") + " Extended Message: " + (extMsg != null ? extMsg.ToString() : "Not Available"));
+                    Console.WriteLine("- Error Occurred putFileChunked, Code: " + retCode.ToString() + " Message: " + (msg != null ? msg.ToString() : "Not Available") + " Extended Message: " + (extMsg != null ? extMsg.ToString() : "Not Available"));
                 }
             }
             return retVal;
@@ -2796,7 +3011,7 @@ namespace Stash
         * @param Array, an associative array containing the source identifier, the values of which credentials to check
         * @return Array, the result / output of the operation
        */
-        public Dictionary<string, object> checkCreds(Dictionary<string, object> srcIdentifier, out int retCode, out string errMsg)
+                public Dictionary<string, object> checkCreds(Dictionary<string, object> srcIdentifier, out int retCode, out string errMsg)
         {
             string apiResult = ""; retCode = 0; errMsg = "";
             Dictionary<string, object> retVal = null;
@@ -2836,6 +3051,8 @@ namespace Stash
             Dictionary<string, object> retVal = null;
             this.dParams = srcIdentifier;
             this.url = this.BASE_API_URL + "api2/auth/adauth";
+
+            if (!this.validateParams("checkcredsad")) { throw new ArgumentException("Invalid Input Parameters"); }
 
             apiResult = this.SendRequest();
 
@@ -3037,7 +3254,7 @@ namespace Stash
 
         // Function reads (gets) a specific version of a file
         // Returns the JSON encoded response string to make it easier to parse by API caller
-        public string readVersion(Dictionary<string, object> srcIdentifier, string fileNameOut, out int retCode)
+        public string readVersion(Dictionary<string, object> srcIdentifier, string fileNameOut, int timeOut, out int retCode)
         //public Dictionary<string, object> getFile(Dictionary<string, object> srcIdentifier, string fileNameOut, out int retCode)
         {
             string apiResult = "";
@@ -3055,7 +3272,7 @@ namespace Stash
 
             if (!this.validateParams("readversion")) { throw new ArgumentException("Invalid Input Parameters"); }
 
-            apiResult = this.sendDownloadRequest(fileNameOut);
+            apiResult = this.sendDownloadRequest(fileNameOut, timeOut);
             if (this.dParams != null) { this.dParams.Clear(); }
 
             if (apiResult == "1")
@@ -3099,7 +3316,7 @@ namespace Stash
             return apiResult;
         }
 
-        // Function deletes a specific version of a file to the current / master file
+        // Function deletes a specific version of a file
         // Returns the JSON encoded response string to make it easier to parse by API caller
         public string deleteVersion(Dictionary<string, object> srcIdentifier, out int retCode)
         {
@@ -3154,7 +3371,7 @@ namespace Stash
         }
 
         // Uploads file to the user's Vault
-        public Dictionary<string, object> webEraseUpdate(string fileNameIn, Dictionary<string, object> srcIdentifier, out int retCode, out UInt64 fileId, out UInt64 fileAliasId)
+        public Dictionary<string, object> webEraseUpdate(string fileNameIn, Dictionary<string, object> srcIdentifier, int timeOut, out int retCode, out UInt64 fileId, out UInt64 fileAliasId)
         {
             string apiResult = "";
             retCode = 0;
@@ -3171,7 +3388,7 @@ namespace Stash
             this.dParams = srcIdentifier;
             if (!this.validateParams("weberaseupdate")) { throw new ArgumentException("Invalid Input Parameters"); }
 
-            apiResult = this.SendFileRequest(fileNameIn);
+            apiResult = this.SendFileRequest(fileNameIn, timeOut);
             if (this.dParams != null) { this.dParams.Clear(); }
 
             retCode = GetResponseCodeDict(apiResult, out retVal);
@@ -3266,7 +3483,7 @@ namespace Stash
         }
 
         // Uploads file to the user's Vault
-        public Dictionary<string, object> webEraseStore(string fileNameIn, Dictionary<string, object> srcIdentifier, out int retCode, out UInt64 fileId, out UInt64 fileAliasId, out int oneTimeCode)
+        public Dictionary<string, object> webEraseStore(string fileNameIn, Dictionary<string, object> srcIdentifier, int timeOut, out int retCode, out UInt64 fileId, out UInt64 fileAliasId, out int oneTimeCode)
         {
             string apiResult = "";
             retCode = 0;
@@ -3283,7 +3500,7 @@ namespace Stash
             this.dParams = srcIdentifier;
             if (!this.validateParams("weberasestore")) { throw new ArgumentException("Invalid Input Parameters"); }
 
-            apiResult = this.SendFileRequest(fileNameIn);
+            apiResult = this.SendFileRequest(fileNameIn, timeOut);
             if (this.dParams != null) { this.dParams.Clear(); }
 
             retCode = GetResponseCodeDict(apiResult, out retVal);
@@ -3319,7 +3536,7 @@ namespace Stash
         }
 
         // Downloads a file from the user's vault or polls for a file pending transaction validation
-        private Dictionary<string, object> webEraseDownload(Dictionary<string, object> srcIdentifier, string fileNameOut, bool polling, out int retCode)
+        private Dictionary<string, object> webEraseDownload(Dictionary<string, object> srcIdentifier, string fileNameOut, int timeOut, bool polling, out int retCode)
         {
             string apiResult = "";
             retCode = 0;
@@ -3344,7 +3561,7 @@ namespace Stash
             // Params are validated the same for retrieve and polling
             if (!this.validateParams("weberaseretrieve")) { throw new ArgumentException("Invalid Input Parameters"); }
 
-            apiResult = this.sendDownloadRequest(fileNameOut);
+            apiResult = this.sendDownloadRequest(fileNameOut, timeOut);
             if (this.dParams != null) { this.dParams.Clear(); }
 
             if (apiResult == "1")
@@ -3375,17 +3592,17 @@ namespace Stash
         }
 
         // Downloads a file from the user's vault
-        public Dictionary<string, object> webEraseRetrieve(Dictionary<string, object> srcIdentifier, string fileNameOut, out int retCode)
+        public Dictionary<string, object> webEraseRetrieve(Dictionary<string, object> srcIdentifier, string fileNameOut, int timeOut, out int retCode)
         {
             retCode = 0;
-            return webEraseDownload(srcIdentifier, fileNameOut, false, out retCode);
+            return webEraseDownload(srcIdentifier, fileNameOut, timeOut, false, out retCode);
         }
 
         // Polls and downloads a file pending transaction validation
-        public Dictionary<string, object> webErasePolling(Dictionary<string, object> srcIdentifier, string fileNameOut, out int retCode)
+        public Dictionary<string, object> webErasePolling(Dictionary<string, object> srcIdentifier, string fileNameOut, int timeOut, out int retCode)
         {
             retCode = 0;
-            return webEraseDownload(srcIdentifier, fileNameOut, true, out retCode);
+            return webEraseDownload(srcIdentifier, fileNameOut, timeOut, true, out retCode);
         }
 
         // Function deletes the file specified by the token
