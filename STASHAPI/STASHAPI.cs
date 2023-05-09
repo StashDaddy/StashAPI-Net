@@ -747,6 +747,7 @@ namespace Stash
             if (this.verbosity) { Console.WriteLine(" - sendFileRequest - "); }
             if (this.url == "") { throw new ArgumentException("Invalid URL"); }
             if (fileNameIn == "" || !System.IO.File.Exists(fileNameIn)) { throw new ArgumentException("A Filename Must Be Specified, or File Does Not Exist"); }
+            string guidFile = "STASHFILE_" + System.Guid.NewGuid().ToString();
 
             // Build params list containing needed API fields
             Dictionary<string, object> apiParams = new Dictionary<string, object>();
@@ -755,6 +756,7 @@ namespace Stash
             apiParams.Add("api_id", this.api_id);
             this.api_timestamp = 0;        // Set to current timestamp
             apiParams.Add("api_timestamp", this.api_timestamp);
+            apiParams.Add("file_guid", guidFile);
 
             // Sign Request
             if ((this.dParams != null) && this.dParams.Count > 0)
