@@ -1,6 +1,6 @@
-﻿/* This is a Visual Studio Shared Project
+/* This is a Visual Studio Shared Project
  * Requires .NET Framework 4.7.2+
- * 
+ *
  * To use this project, add the project to your existing solution, then add a reference to the shared
  * project from your existing code/application project.
  * Structure:
@@ -10,7 +10,6 @@
  * 
  * Important Note - you must add the following references to your code/application project
  * This library uses the Newtonsoft Json library for serialization of objects, and javascriptserializer for all deserialize operations
- * 
  */
 using System;                           // Reference: System
 using System.Text;                      // Reference: System
@@ -213,6 +212,7 @@ namespace Stash
             //strToSign = serializer.Serialize(dataIn).ToUpper();
             //strToSign = JsonSerializer.Serialize(dataIn).ToUpper();
             strToSign = Newtonsoft.Json.JsonConvert.SerializeObject(dataIn);
+
             sig = Hash_hmac("sha256", strToSign, this.api_pw);
 
             // Convert to lowercase to match PHP's hash_hmac function which outputs lowercase hexbits
